@@ -10,112 +10,212 @@ namespace Livingstone.Library
     //timestamped data used in the memorycache, Use the timestamp to control expiracy
     class MemoryCacheTimedItem
     {
-        public DateTime ts { get; set; }
+        public DateTime expiry { get; set; }
         public object data { get; set; }
 
         //default: ts = now
-        public MemoryCacheTimedItem(object data)
+        public MemoryCacheTimedItem(object data, int expireSec)
         {
-            ts = DateTime.Now;
             this.data = data;
+            expiry = DateTime.Now.AddSeconds(expireSec);
         }
     }
-
 
     public static class CacheHandler
     {
         static ConcurrentDictionary<string, Task> keyTasks = new ConcurrentDictionary<string, Task>();
-        static ConcurrentDictionary<string, CancellationTokenSource> keyTs = new ConcurrentDictionary<string, CancellationTokenSource>();
+        static ConcurrentDictionary<string, CancellationTokenSource> keyCancelToken = new ConcurrentDictionary<string, CancellationTokenSource>();
+        static ConcurrentDictionary<string, ConcurrentBag<Exception>> errors = new ConcurrentDictionary<string, ConcurrentBag<Exception>>();
 
-        public static void resetMemCache(ConcurrentDictionary<string, Func<object>> memKeys)
+        private static void recordError(string key, Exception e)
+        {
+            if (e == null)
+                return;
+            if (!errors.ContainsKey(key))
+                errors[key] = new ConcurrentBag<Exception>();
+            errors[key].Add(e);
+        }
+
+        public static void resetMemCache(ConcurrentDictionary<string, Func<object>> memKeyEntries)
         {
             if (MemoryCache.Default != null)
-                foreach (var memKey in memKeys)
-                    if (MemoryCache.Default.Contains(memKey.Key))
+                foreach (var keyFuncSet in memKeyEntries)
+                    if (MemoryCache.Default.Contains(keyFuncSet.Key) && MemoryCache.Default[keyFuncSet.Key] != null)
                     {
-                        if (keyTasks.ContainsKey(memKey.Key) && !keyTasks[memKey.Key].IsCompleted)
-                            keyTs[memKey.Key].Cancel();
-                        MemoryCache.Default.Remove(memKey.Key);
+                        if (keyTasks.ContainsKey(keyFuncSet.Key) && !keyTasks[keyFuncSet.Key].IsCompleted)
+                            keyCancelToken[keyFuncSet.Key].Cancel();
 
                         CancellationTokenSource ts = new CancellationTokenSource();
                         CancellationToken ct = ts.Token;
-                        keyTs[memKey.Key] = ts;
-                        keyTasks[memKey.Key] = Task.Factory.StartNew(() =>
+                        keyCancelToken[keyFuncSet.Key] = ts;
+                        keyTasks[keyFuncSet.Key] = Task.Factory.StartNew(() =>
                         {
-                            object data = memKey.Value();
-                            if (!ct.IsCancellationRequested)
-                                buildCache(memKey.Key, data, 240);
-                        }, TaskCreationOptions.LongRunning);
+                            try
+                            {
+                                object data = keyFuncSet.Value();
+                                if (!ct.IsCancellationRequested &&
+                                MemoryCache.Default.Contains(keyFuncSet.Key) && MemoryCache.Default[keyFuncSet.Key] != null)
+                                    (MemoryCache.Default[keyFuncSet.Key] as MemoryCacheTimedItem).data = data;
+                            }
+                            catch (Exception e)
+                            {
+                                recordError(keyFuncSet.Key, e);
+                            }
+                        });
                     }
-            memKeys.Clear();
+                    else
+                    {
+                        //clean up expired keys
+                        keyTasks.TryRemove(keyFuncSet.Key, out var dispose1);
+                        if (dispose1 != null)
+                            dispose1.Dispose();
+                        keyCancelToken.TryRemove(keyFuncSet.Key, out var dispose2);
+                        if (dispose2 != null)
+                            dispose2.Dispose();
+                        if (MemoryCache.Default.Contains(keyFuncSet.Key))
+                            MemoryCache.Default.Remove(keyFuncSet.Key);
+                        if (errors.ContainsKey(keyFuncSet.Key))
+                            errors.TryRemove(keyFuncSet.Key, out var dispose);
+                    }
         }
 
-        public static void buildCache(string key, object data, int expiry = 3600, bool noForce = true)
+        //key: a unique key as the cache entry
+        //data: the data to be stored
+        //expirySec: expiry time in seconds
+        //throttle: if not throttle, the update of cache will be forced before fetching new data beyond expiry time
+        public static void buildCache(string key, object data, int expirySec = 3600, bool throttle = true)
         {
             if (MemoryCache.Default != null)
             {
+                if (expirySec == 0)
+                    expirySec = 432000;     //a week
                 //noForce: do not force updates before cache expires
-                if (!noForce || !MemoryCache.Default.Contains(key) || MemoryCache.Default[key] == null ||
-                    !(expiry == 0 || (DateTime.Now - (MemoryCache.Default[key] as MemoryCacheTimedItem).ts).TotalSeconds <= expiry))
+                if (!throttle || !MemoryCache.Default.Contains(key) || MemoryCache.Default[key] == null ||
+                     (MemoryCache.Default[key] as MemoryCacheTimedItem).expiry > DateTime.Now
+                    )
                 {
-                    MemoryCacheTimedItem newEntry = new MemoryCacheTimedItem(data);
-                    DateTimeOffset offset = ObjectCache.InfiniteAbsoluteExpiration;
-                    if (expiry > 0)
-                        offset = DateTimeOffset.UtcNow.AddSeconds(expiry);
+                    MemoryCacheTimedItem newEntry = new MemoryCacheTimedItem(data, expirySec);
                     MemoryCache.Default.Set(key, newEntry,
-                        new CacheItemPolicy() { AbsoluteExpiration = offset }
+                        new CacheItemPolicy() { SlidingExpiration = TimeSpan.FromSeconds(expirySec) }
                         );
                 }
             }
         }
 
-        public static object readCache(string key, Func<object> getData, int intervalSec = 3600, int expiry = 7200)
+        //key: a unique key as the cache entry
+        //data: a delegate to obtain the data in case of expiry
+        //intervalSec: interval before next update in seconds
+        //expirySec: sliding expiry time before the cache will be wiped out
+        public static object readCache(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
         {
+            if (MemoryCache.Default == null)
+                return null;
             //data within effective time
             if (MemoryCache.Default != null && MemoryCache.Default.Contains(key))
             {
                 var dataInCache = MemoryCache.Default[key] as MemoryCacheTimedItem;
-                if (dataInCache != null && (intervalSec == 0 || (DateTime.Now - dataInCache.ts).TotalSeconds <= intervalSec))
+                if (dataInCache != null && dataInCache.expiry <= DateTime.Now)
                     return dataInCache.data;
             }
-            //if expired or not existing, build cache for later use
+            //else: expired or not existing, build cache for later use
             object data = null;
             if (keyTasks.ContainsKey(key) && !keyTasks[key].IsCompleted)
-                keyTs[key].Cancel();
+            {
+                keyCancelToken[key].Cancel();
+                errors.TryRemove(key, out var dispose);
+            }
 
             CancellationTokenSource ts = new CancellationTokenSource();
             CancellationToken ct = ts.Token;
-            keyTs[key] = ts;
+            keyCancelToken[key] = ts;
             keyTasks[key] = Task.Run(() =>
             {
-                data = getData();
-                if (!ct.IsCancellationRequested)
-                    buildCache(key, data, expiry, false);
+                try
+                {
+                    data = getData();
+                    if (!ct.IsCancellationRequested)
+                        buildCache(key, data, expirySec, false);
+                }
+                catch (Exception e)
+                {
+                    recordError(key, e);
+                }
             });
             keyTasks[key].Wait();
+
+            //release memory
+            if (keyTasks[key] != null && keyTasks[key].IsCompleted)
+            {
+                keyTasks.TryRemove(key, out var tempTsk);
+                tempTsk.Dispose();
+                keyCancelToken.TryRemove(key, out var tempCt);
+                if (tempCt != null)
+                    tempCt.Dispose();
+            }
+
+            if (errors.ContainsKey(key))
+            {
+                var aggEx = new AggregateException(errors[key]);
+                errors.TryRemove(key, out var dispose);
+                throw aggEx.Flatten();
+            }
             return data;
         }
 
-        public static object readCacheBackground(string key, Func<object> getData, int intervalSec = 3600, int expiry = 7200)
+        //key: a unique key as the cache entry
+        //data: a delegate to obtain the data in case of expiry
+        //intervalSec: interval before next update in seconds
+        //expirySec: sliding expiry time before the cache will be wiped out
+        public static object readCacheBackground(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
         {
+            if (MemoryCache.Default == null)
+                return null;
+            if (expirySec == 0)
+                expirySec = 432000;     //a week
             //background update for next use if data expires
-            if (((!MemoryCache.Default.Contains(key) || MemoryCache.Default[key] == null)
-                || (intervalSec != 0 && (DateTime.Now - (MemoryCache.Default[key] as MemoryCacheTimedItem).ts).TotalSeconds > intervalSec))
-                && (!keyTasks.ContainsKey(key) || keyTasks[key].IsCompleted))
+            if (
+                ((!MemoryCache.Default.Contains(key) || MemoryCache.Default[key] == null)
+                    || (MemoryCache.Default[key] as MemoryCacheTimedItem).expiry > DateTime.Now)
+                && (!keyTasks.ContainsKey(key) || keyTasks[key].IsCompleted)
+                )
             {
                 CancellationTokenSource ts = new CancellationTokenSource();
                 CancellationToken ct = ts.Token;
-                keyTs[key] = ts;
+                keyCancelToken[key] = ts;
                 keyTasks[key] = Task.Factory.StartNew(() =>
                 {
-                    object newData = getData();
-                    if (!ct.IsCancellationRequested)
-                        buildCache(key, newData, intervalSec, false);
-                }, TaskCreationOptions.LongRunning);
+                    try
+                    {
+                        object newData = getData();
+                        if (!ct.IsCancellationRequested)
+                            buildCache(key, newData, intervalSec, false);
+                    }
+                    catch (Exception e)
+                    {
+                        recordError(key, e);
+                    }
+                });
             }
-            //if data not exists, building cache becomes the only option
+            //if data does not exist, building cache becomes the only option
             if (!MemoryCache.Default.Contains(key) || MemoryCache.Default[key] == null)
                 keyTasks[key].Wait();
+
+            //release memory
+            if (keyTasks[key] != null && keyTasks[key].IsCompleted)
+            {
+                keyTasks.TryRemove(key, out var tempTsk);
+                tempTsk.Dispose();
+                keyCancelToken.TryRemove(key, out var tempCt);
+                if (tempCt != null)
+                    tempCt.Dispose();
+            }
+
+            if (errors.ContainsKey(key))
+            {
+                var aggEx = new AggregateException(errors[key]);
+                errors.TryRemove(key, out var dispose);
+                throw aggEx.Flatten();
+            }
             return (MemoryCache.Default[key] as MemoryCacheTimedItem).data;
         }
     }
