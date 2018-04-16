@@ -23,6 +23,8 @@ namespace Livingstone.Library
 
     public static class CacheHandler
     {
+        static MemoryCache memoryCache = new MemoryCache("CacheHandler");
+
         static ConcurrentDictionary<string, Task> keyTasks = new ConcurrentDictionary<string, Task>();
         static ConcurrentDictionary<string, CancellationTokenSource> keyCancelToken = new ConcurrentDictionary<string, CancellationTokenSource>();
         static ConcurrentDictionary<string, ConcurrentBag<Exception>> errors = new ConcurrentDictionary<string, ConcurrentBag<Exception>>();
@@ -39,106 +41,103 @@ namespace Livingstone.Library
 
         public static void resetMemCache(ConcurrentDictionary<string, Func<object>> memKeyEntries)
         {
-
-            if (MemoryCache.Default != null)
-                Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
-               {
-                   lock (locks)
-                       if (!locks.ContainsKey(keyFuncSet.Key))
-                           locks[keyFuncSet.Key] = new object();
-                   if (MemoryCache.Default.Contains(keyFuncSet.Key) && MemoryCache.Default[keyFuncSet.Key] != null)
-                       lock (locks[keyFuncSet.Key])
-                       {
-                           if (keyTasks.ContainsKey(keyFuncSet.Key) && !keyTasks[keyFuncSet.Key].IsCompleted)
-                               keyCancelToken[keyFuncSet.Key].Cancel();
-
-                           CancellationTokenSource ts = new CancellationTokenSource();
-                           CancellationToken ct = ts.Token;
-                           keyCancelToken[keyFuncSet.Key] = ts;
-                           keyTasks[keyFuncSet.Key] = Task.Factory.StartNew(() =>
-                           {
-                               try
-                               {
-                                   object data = keyFuncSet.Value();
-                                   if (!ct.IsCancellationRequested &&
-                                   MemoryCache.Default.Contains(keyFuncSet.Key) && MemoryCache.Default[keyFuncSet.Key] != null)
-                                       (MemoryCache.Default[keyFuncSet.Key] as MemoryCacheTimedItem).data = data;
-                               }
-                               catch (Exception e)
-                               {
-                                   recordError(keyFuncSet.Key, e);
-                               }
-                           });
-                       }
-                   else
+            Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
+           {
+               lock (locks)
+                   if (!locks.ContainsKey(keyFuncSet.Key))
+                       locks[keyFuncSet.Key] = new object();
+               if (memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
+                   lock (locks[keyFuncSet.Key])
                    {
-                       //clean up expired keys
-                       keyTasks.TryRemove(keyFuncSet.Key, out var dispose1);
-                       if (dispose1 != null)
-                           dispose1.Dispose();
-                       keyCancelToken.TryRemove(keyFuncSet.Key, out var dispose2);
-                       if (dispose2 != null)
-                           dispose2.Dispose();
-                       if (MemoryCache.Default.Contains(keyFuncSet.Key))
-                           MemoryCache.Default.Remove(keyFuncSet.Key);
-                       if (errors.ContainsKey(keyFuncSet.Key))
-                           errors.TryRemove(keyFuncSet.Key, out var dispose);
-                       lock (locks)
-                           locks.Remove(keyFuncSet.Key);
+                       if (keyTasks.ContainsKey(keyFuncSet.Key) && !keyTasks[keyFuncSet.Key].IsCompleted)
+                           keyCancelToken[keyFuncSet.Key].Cancel();
+
+                       CancellationTokenSource ts = new CancellationTokenSource();
+                       CancellationToken ct = ts.Token;
+                       keyCancelToken[keyFuncSet.Key] = ts;
+                       keyTasks[keyFuncSet.Key] = Task.Factory.StartNew(() =>
+                       {
+                           try
+                           {
+                               object data = keyFuncSet.Value();
+                               if (!ct.IsCancellationRequested &&
+                               memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
+                                   (memoryCache[keyFuncSet.Key] as MemoryCacheTimedItem).data = data;
+                           }
+                           catch (Exception e)
+                           {
+                               recordError(keyFuncSet.Key, e);
+                           }
+                       });
                    }
-               });
+               else
+               {
+                   //clean up expired keys
+                   keyTasks.TryRemove(keyFuncSet.Key, out var dispose1);
+                   if (dispose1 != null)
+                       dispose1.Dispose();
+                   keyCancelToken.TryRemove(keyFuncSet.Key, out var dispose2);
+                   if (dispose2 != null)
+                       dispose2.Dispose();
+                   if (memoryCache.Contains(keyFuncSet.Key))
+                       memoryCache.Remove(keyFuncSet.Key);
+                   if (errors.ContainsKey(keyFuncSet.Key))
+                       errors.TryRemove(keyFuncSet.Key, out var dispose);
+                   lock (locks)
+                       locks.Remove(keyFuncSet.Key);
+               }
+           });
         }
 
         public static async Task resetMemCacheAsync(ConcurrentDictionary<string, Func<object>> memKeyEntries)
         {
             ConcurrentBag<Task> tskList = new ConcurrentBag<Task>();
-            if (MemoryCache.Default != null)
-                Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
-                {
-                    lock (locks)
-                        if (!locks.ContainsKey(keyFuncSet.Key))
-                            locks[keyFuncSet.Key] = new object();
-                    lock (locks[keyFuncSet.Key])
-                        if (MemoryCache.Default.Contains(keyFuncSet.Key) && MemoryCache.Default[keyFuncSet.Key] != null)
-                        {
-                            if (keyTasks.ContainsKey(keyFuncSet.Key) && !keyTasks[keyFuncSet.Key].IsCompleted)
-                                keyCancelToken[keyFuncSet.Key].Cancel();
+            Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
+            {
+                lock (locks)
+                    if (!locks.ContainsKey(keyFuncSet.Key))
+                        locks[keyFuncSet.Key] = new object();
+                lock (locks[keyFuncSet.Key])
+                    if (memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
+                    {
+                        if (keyTasks.ContainsKey(keyFuncSet.Key) && !keyTasks[keyFuncSet.Key].IsCompleted)
+                            keyCancelToken[keyFuncSet.Key].Cancel();
 
-                            CancellationTokenSource ts = new CancellationTokenSource();
-                            CancellationToken ct = ts.Token;
-                            keyCancelToken[keyFuncSet.Key] = ts;
-                            var newTsk = Task.Run(() =>
-                            {
-                                try
-                                {
-                                    object data = keyFuncSet.Value();
-                                    if (!ct.IsCancellationRequested &&
-                                    MemoryCache.Default.Contains(keyFuncSet.Key) && MemoryCache.Default[keyFuncSet.Key] != null)
-                                        (MemoryCache.Default[keyFuncSet.Key] as MemoryCacheTimedItem).data = data;
-                                }
-                                catch (Exception e)
-                                {
-                                    recordError(keyFuncSet.Key, e);
-                                }
-                            });
-                            keyTasks[keyFuncSet.Key] = newTsk;
-                            tskList.Add(newTsk);
-                        }
-                        else
+                        CancellationTokenSource ts = new CancellationTokenSource();
+                        CancellationToken ct = ts.Token;
+                        keyCancelToken[keyFuncSet.Key] = ts;
+                        var newTsk = Task.Run(() =>
                         {
-                            //clean up expired keys
-                            keyTasks.TryRemove(keyFuncSet.Key, out var dispose1);
-                            if (dispose1 != null)
-                                dispose1.Dispose();
-                            keyCancelToken.TryRemove(keyFuncSet.Key, out var dispose2);
-                            if (dispose2 != null)
-                                dispose2.Dispose();
-                            if (MemoryCache.Default.Contains(keyFuncSet.Key))
-                                MemoryCache.Default.Remove(keyFuncSet.Key);
-                            if (errors.ContainsKey(keyFuncSet.Key))
-                                errors.TryRemove(keyFuncSet.Key, out var dispose);
-                        }
-                });
+                            try
+                            {
+                                object data = keyFuncSet.Value();
+                                if (!ct.IsCancellationRequested &&
+                                memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
+                                    (memoryCache[keyFuncSet.Key] as MemoryCacheTimedItem).data = data;
+                            }
+                            catch (Exception e)
+                            {
+                                recordError(keyFuncSet.Key, e);
+                            }
+                        });
+                        keyTasks[keyFuncSet.Key] = newTsk;
+                        tskList.Add(newTsk);
+                    }
+                    else
+                    {
+                        //clean up expired keys
+                        keyTasks.TryRemove(keyFuncSet.Key, out var dispose1);
+                        if (dispose1 != null)
+                            dispose1.Dispose();
+                        keyCancelToken.TryRemove(keyFuncSet.Key, out var dispose2);
+                        if (dispose2 != null)
+                            dispose2.Dispose();
+                        if (memoryCache.Contains(keyFuncSet.Key))
+                            memoryCache.Remove(keyFuncSet.Key);
+                        if (errors.ContainsKey(keyFuncSet.Key))
+                            errors.TryRemove(keyFuncSet.Key, out var dispose);
+                    }
+            });
             await Task.WhenAll(tskList).ConfigureAwait(false);
         }
 
@@ -148,20 +147,18 @@ namespace Livingstone.Library
         //throttle: if not throttle, the update of cache will be forced before fetching new data beyond expiry time
         public static void buildCache(string key, object data, int expirySec = 3600, bool throttle = true)
         {
-            if (MemoryCache.Default != null)
+
+            if (expirySec == 0)
+                expirySec = 432000;     //a week
+                                        //noForce: do not force updates before cache expires
+            if (!throttle || !memoryCache.Contains(key) || memoryCache[key] == null ||
+                 (memoryCache[key] as MemoryCacheTimedItem).expiry > DateTime.UtcNow
+                )
             {
-                if (expirySec == 0)
-                    expirySec = 432000;     //a week
-                                            //noForce: do not force updates before cache expires
-                if (!throttle || !MemoryCache.Default.Contains(key) || MemoryCache.Default[key] == null ||
-                     (MemoryCache.Default[key] as MemoryCacheTimedItem).expiry > DateTime.UtcNow
-                    )
-                {
-                    MemoryCacheTimedItem newEntry = new MemoryCacheTimedItem(data, expirySec);
-                    MemoryCache.Default.Set(key, newEntry,
-                        new CacheItemPolicy() { SlidingExpiration = TimeSpan.FromSeconds(expirySec) }
-                        );
-                }
+                MemoryCacheTimedItem newEntry = new MemoryCacheTimedItem(data, expirySec);
+                memoryCache.Set(key, newEntry,
+                    new CacheItemPolicy() { SlidingExpiration = TimeSpan.FromSeconds(expirySec) }
+                    );
             }
         }
 
@@ -175,12 +172,10 @@ namespace Livingstone.Library
                 if (!locks.ContainsKey(key))
                     locks[key] = new object();
 
-            if (MemoryCache.Default == null)
-                return null;
             //data within effective time
-            if (MemoryCache.Default != null && MemoryCache.Default.Contains(key))
+            if (memoryCache.Contains(key))
             {
-                var dataInCache = MemoryCache.Default[key] as MemoryCacheTimedItem;
+                var dataInCache = memoryCache[key] as MemoryCacheTimedItem;
                 if (dataInCache != null && dataInCache.expiry <= DateTime.UtcNow)
                     return dataInCache.data;
             }
@@ -244,14 +239,12 @@ namespace Livingstone.Library
                 if (!locks.ContainsKey(key))
                     locks[key] = new object();
 
-            if (MemoryCache.Default == null)
-                return null;
             if (expirySec == 0)
                 expirySec = 432000;     //a week
                                         //background update for next use if data expires
             if (
-                ((!MemoryCache.Default.Contains(key) || MemoryCache.Default[key] == null)
-                    || (MemoryCache.Default[key] as MemoryCacheTimedItem).expiry > DateTime.UtcNow))
+                ((!memoryCache.Contains(key) || memoryCache[key] == null)
+                    || (memoryCache[key] as MemoryCacheTimedItem).expiry > DateTime.UtcNow))
             {
                 lock (locks[key])
                     if (!keyTasks.ContainsKey(key) || keyTasks[key].IsCompleted)
@@ -276,7 +269,7 @@ namespace Livingstone.Library
             }
 
             //if data does not exist, building cache becomes the only choice
-            if ((!MemoryCache.Default.Contains(key) || MemoryCache.Default[key] == null) && keyTasks.ContainsKey(key))
+            if ((!memoryCache.Contains(key) || memoryCache[key] == null) && keyTasks.ContainsKey(key))
                 keyTasks[key].Wait();
             lock (locks[key])
                 if (keyTasks.ContainsKey(key) && keyTasks[key] != null && keyTasks[key].IsCompleted)
@@ -293,7 +286,7 @@ namespace Livingstone.Library
                 var aggEx = new AggregateException(ex);
                 throw aggEx.Flatten();
             }
-            return (MemoryCache.Default[key] as MemoryCacheTimedItem).data;
+            return (memoryCache[key] as MemoryCacheTimedItem).data;
         }
     }
 }
