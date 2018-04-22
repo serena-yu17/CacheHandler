@@ -163,7 +163,7 @@ namespace Livingstone.Library
         }
 
         //key: a unique key as the cache entry
-        //data: a delegate to obtain the data in case of expiry
+        //getData: a delegate to obtain the data in case of expiry
         //intervalSec: interval before next update in seconds
         //expirySec: sliding expiry time before the cache will be wiped out
         public static object readCache(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
