@@ -48,16 +48,17 @@ namespace Livingstone.Library
             }
             if (keyTasks.TryRemove(key, out var tsk))
                 tsk.Dispose();
-            errors.TryRemove(key, out var err);            
+            errors.TryRemove(key, out var err);
         }
 
         public static void resetMemCache(ConcurrentDictionary<string, Func<object>> memKeyEntries)
         {
             Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
            {
-               lock (locks)
-                   if (!locks.ContainsKey(keyFuncSet.Key))
-                       locks[keyFuncSet.Key] = new object();
+               if (!locks.ContainsKey(keyFuncSet.Key))
+                   lock (locks)
+                       if (!locks.ContainsKey(keyFuncSet.Key))
+                           locks[keyFuncSet.Key] = new object();
                if (memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
                    lock (locks[keyFuncSet.Key])
                    {
@@ -106,9 +107,10 @@ namespace Livingstone.Library
             ConcurrentBag<Task> tskList = new ConcurrentBag<Task>();
             Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
             {
-                lock (locks)
-                    if (!locks.ContainsKey(keyFuncSet.Key))
-                        locks[keyFuncSet.Key] = new object();
+                if (!locks.ContainsKey(keyFuncSet.Key))
+                    lock (locks)
+                        if (!locks.ContainsKey(keyFuncSet.Key))
+                            locks[keyFuncSet.Key] = new object();
                 lock (locks[keyFuncSet.Key])
                     if (memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
                     {
@@ -175,6 +177,11 @@ namespace Livingstone.Library
 
         public static void buildCache(string key, Func<object> getData, int expirySec = 3600, bool throttle = true)
         {
+            if (!locks.ContainsKey(key))
+                lock (locks)
+                    if (!locks.ContainsKey(key))
+                        locks[key] = new object();
+
             if (expirySec == 0)
                 expirySec = 432000;     //a week
                                         //noForce: do not force updates before cache expires
@@ -211,9 +218,10 @@ namespace Livingstone.Library
         //expirySec: sliding expiry time before the cache will be wiped out
         public static object readCache(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
         {
-            lock (locks)
-                if (!locks.ContainsKey(key))
-                    locks[key] = new object();
+            if (!locks.ContainsKey(key))
+                lock (locks)
+                    if (!locks.ContainsKey(key))
+                        locks[key] = new object();
 
             //data within effective time
             if (memoryCache.Contains(key))
@@ -278,9 +286,10 @@ namespace Livingstone.Library
         //expirySec: sliding expiry time before the cache will be wiped out
         public static object readCacheBackground(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
         {
-            lock (locks)
-                if (!locks.ContainsKey(key))
-                    locks[key] = new object();
+            if (!locks.ContainsKey(key))
+                lock (locks)
+                    if (!locks.ContainsKey(key))
+                        locks[key] = new object();
 
             if (expirySec == 0)
                 expirySec = 432000;     //a week
