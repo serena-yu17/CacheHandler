@@ -7,20 +7,6 @@ using System.Threading.Tasks;
 
 namespace Livingstone.Library
 {
-    //timestamped data used in the memorycache, Use the timestamp to control expiracy
-    class MemoryCacheTimedItem
-    {
-        public DateTime expiry { get; set; }
-        public object data { get; set; }
-
-        //default: ts = now
-        public MemoryCacheTimedItem(object data, int expireSec)
-        {
-            this.data = data;
-            expiry = DateTime.UtcNow.AddSeconds(expireSec);
-        }
-    }
-
     public static class CacheHandler
     {
         static MemoryCache memoryCache = new MemoryCache("CacheHandler");
@@ -30,6 +16,20 @@ namespace Livingstone.Library
         static ConcurrentDictionary<string, ConcurrentBag<Exception>> errors = new ConcurrentDictionary<string, ConcurrentBag<Exception>>();
         static Dictionary<string, object> locks = new Dictionary<string, object>();
 
+        //timestamped data used in the memorycache, Use the timestamp to control expiracy
+        class MemoryCacheTimedItem
+        {
+            public DateTime expiry { get; set; }
+            public object data { get; set; }
+
+            //default: ts = now
+            public MemoryCacheTimedItem(object data, int expireSec)
+            {
+                this.data = data;
+                expiry = DateTime.UtcNow.AddSeconds(expireSec);
+            }
+        }
+
         private static void recordError(string key, Exception e)
         {
             if (e == null)
@@ -37,6 +37,18 @@ namespace Livingstone.Library
             if (!errors.ContainsKey(key))
                 errors[key] = new ConcurrentBag<Exception>();
             errors[key].Add(e);
+        }
+
+        public static void removeKey(string key)
+        {
+            if (keyCancelToken.TryRemove(key, out var ct))
+            {
+                ct.Cancel();
+                ct.Dispose();
+            }
+            if (keyTasks.TryRemove(key, out var tsk))
+                tsk.Dispose();
+            errors.TryRemove(key, out var err);            
         }
 
         public static void resetMemCache(ConcurrentDictionary<string, Func<object>> memKeyEntries)
@@ -147,7 +159,6 @@ namespace Livingstone.Library
         //throttle: if not throttle, the update of cache will be forced before fetching new data beyond expiry time
         public static void buildCache(string key, object data, int expirySec = 3600, bool throttle = true)
         {
-
             if (expirySec == 0)
                 expirySec = 432000;     //a week
                                         //noForce: do not force updates before cache expires
@@ -159,6 +170,38 @@ namespace Livingstone.Library
                 memoryCache.Set(key, newEntry,
                     new CacheItemPolicy() { SlidingExpiration = TimeSpan.FromSeconds(expirySec) }
                     );
+            }
+        }
+
+        public static void buildCache(string key, Func<object> getData, int expirySec = 3600, bool throttle = true)
+        {
+            if (expirySec == 0)
+                expirySec = 432000;     //a week
+                                        //noForce: do not force updates before cache expires
+            if (!throttle || !memoryCache.Contains(key) || memoryCache[key] == null ||
+                 (memoryCache[key] as MemoryCacheTimedItem).expiry > DateTime.UtcNow
+                )
+            {
+                lock (locks[key])
+                    if (!keyTasks.ContainsKey(key) || keyTasks[key].IsCompleted)
+                    {
+                        CancellationTokenSource ts = new CancellationTokenSource();
+                        CancellationToken ct = ts.Token;
+                        keyCancelToken[key] = ts;
+                        keyTasks[key] = Task.Factory.StartNew(() =>
+                        {
+                            try
+                            {
+                                object newData = getData();
+                                if (!ct.IsCancellationRequested)
+                                    buildCache(key, newData, expirySec, false);
+                            }
+                            catch (Exception e)
+                            {
+                                recordError(key, e);
+                            }
+                        });
+                    }
             }
         }
 
@@ -258,7 +301,7 @@ namespace Livingstone.Library
                             {
                                 object newData = getData();
                                 if (!ct.IsCancellationRequested)
-                                    buildCache(key, newData, intervalSec, false);
+                                    buildCache(key, newData, expirySec, false);
                             }
                             catch (Exception e)
                             {
