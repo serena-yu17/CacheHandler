@@ -186,7 +186,7 @@ namespace Livingstone.Library
                 expirySec = 432000;     //a week
                                         //noForce: do not force updates before cache expires
             if (!throttle || !memoryCache.Contains(key) || memoryCache[key] == null ||
-                 (memoryCache[key] as MemoryCacheTimedItem).expiry > DateTime.UtcNow
+                 (memoryCache[key] as MemoryCacheTimedItem).expiry < DateTime.UtcNow
                 )
             {
                 lock (locks[key])
@@ -227,7 +227,7 @@ namespace Livingstone.Library
             if (memoryCache.Contains(key))
             {
                 var dataInCache = memoryCache[key] as MemoryCacheTimedItem;
-                if (dataInCache != null && dataInCache.expiry <= DateTime.UtcNow)
+                if (dataInCache != null && dataInCache.expiry > DateTime.UtcNow)
                     return dataInCache.data;
             }
             object data = null;
@@ -296,7 +296,7 @@ namespace Livingstone.Library
                                         //background update for next use if data expires
             if (
                 ((!memoryCache.Contains(key) || memoryCache[key] == null)
-                    || (memoryCache[key] as MemoryCacheTimedItem).expiry > DateTime.UtcNow))
+                    || (memoryCache[key] as MemoryCacheTimedItem).expiry < DateTime.UtcNow))
             {
                 lock (locks[key])
                     if (!keyTasks.ContainsKey(key) || keyTasks[key].IsCompleted)
