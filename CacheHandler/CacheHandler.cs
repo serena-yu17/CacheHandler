@@ -51,7 +51,7 @@ namespace Livingstone.Library
             errors.TryRemove(key, out var err);
         }
 
-        public static void resetMemCache(ConcurrentDictionary<string, Func<object>> memKeyEntries)
+        public static void resetMemCache(IDictionary<string, Func<object>> memKeyEntries)
         {
             Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
            {
@@ -64,24 +64,26 @@ namespace Livingstone.Library
                    {
                        if (keyTasks.ContainsKey(keyFuncSet.Key) && !keyTasks[keyFuncSet.Key].IsCompleted)
                            keyCancelToken[keyFuncSet.Key].Cancel();
-
+                       if (keyCancelToken[keyFuncSet.Key] != null)
+                           keyCancelToken[keyFuncSet.Key].Dispose();
                        CancellationTokenSource ts = new CancellationTokenSource();
                        CancellationToken ct = ts.Token;
                        keyCancelToken[keyFuncSet.Key] = ts;
+                       var localkeyFuncSet = keyFuncSet;
                        keyTasks[keyFuncSet.Key] = Task.Factory.StartNew(() =>
                        {
                            object data = null;
                            try
                            {
-                               data = keyFuncSet.Value();
+                               data = localkeyFuncSet.Value();
                                if (!ct.IsCancellationRequested &&
-                               memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
-                                   (memoryCache[keyFuncSet.Key] as MemoryCacheTimedItem).data = data;
+                               memoryCache.Contains(localkeyFuncSet.Key) && memoryCache[localkeyFuncSet.Key] != null)
+                                   (memoryCache[localkeyFuncSet.Key] as MemoryCacheTimedItem).data = data;
                                else return null;
                            }
                            catch (Exception e)
                            {
-                               recordError(keyFuncSet.Key, e);
+                               recordError(localkeyFuncSet.Key, e);
                            }
                            return data;
                        });
@@ -105,7 +107,7 @@ namespace Livingstone.Library
            });
         }
 
-        public static async Task resetMemCacheAsync(ConcurrentDictionary<string, Func<object>> memKeyEntries)
+        public static async Task resetMemCacheAsync(IDictionary<string, Func<object>> memKeyEntries)
         {
             ConcurrentBag<Task> tskList = new ConcurrentBag<Task>();
             Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
@@ -119,24 +121,26 @@ namespace Livingstone.Library
                     {
                         if (keyTasks.ContainsKey(keyFuncSet.Key) && !keyTasks[keyFuncSet.Key].IsCompleted)
                             keyCancelToken[keyFuncSet.Key].Cancel();
-
+                        if (keyCancelToken[keyFuncSet.Key] != null)
+                            keyCancelToken[keyFuncSet.Key].Dispose();
                         CancellationTokenSource ts = new CancellationTokenSource();
                         CancellationToken ct = ts.Token;
                         keyCancelToken[keyFuncSet.Key] = ts;
+                        var localkeyFuncSet = keyFuncSet;
                         var newTsk = Task.Run(() =>
                         {
                             object data = null;
                             try
                             {
-                                data = keyFuncSet.Value();
+                                data = localkeyFuncSet.Value();
                                 if (!ct.IsCancellationRequested &&
-                                memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
-                                    (memoryCache[keyFuncSet.Key] as MemoryCacheTimedItem).data = data;
+                                memoryCache.Contains(localkeyFuncSet.Key) && memoryCache[localkeyFuncSet.Key] != null)
+                                    (memoryCache[localkeyFuncSet.Key] as MemoryCacheTimedItem).data = data;
                                 else return null;
                             }
                             catch (Exception e)
                             {
-                                recordError(keyFuncSet.Key, e);
+                                recordError(localkeyFuncSet.Key, e);
                             }
                             return data;
                         });
