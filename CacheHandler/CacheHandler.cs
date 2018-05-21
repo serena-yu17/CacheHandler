@@ -11,7 +11,7 @@ namespace Livingstone.Library
     {
         static MemoryCache memoryCache = new MemoryCache("CacheHandler");
 
-        static ConcurrentDictionary<string, Task> keyTasks = new ConcurrentDictionary<string, Task>();
+        static ConcurrentDictionary<string, Task<object>> keyTasks = new ConcurrentDictionary<string, Task<object>>();
         static ConcurrentDictionary<string, CancellationTokenSource> keyCancelToken = new ConcurrentDictionary<string, CancellationTokenSource>();
         static ConcurrentDictionary<string, ConcurrentBag<Exception>> errors = new ConcurrentDictionary<string, ConcurrentBag<Exception>>();
         static Dictionary<string, object> locks = new Dictionary<string, object>();
@@ -70,17 +70,20 @@ namespace Livingstone.Library
                        keyCancelToken[keyFuncSet.Key] = ts;
                        keyTasks[keyFuncSet.Key] = Task.Factory.StartNew(() =>
                        {
+                           object data = null;
                            try
                            {
-                               object data = keyFuncSet.Value();
+                               data = keyFuncSet.Value();
                                if (!ct.IsCancellationRequested &&
                                memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
                                    (memoryCache[keyFuncSet.Key] as MemoryCacheTimedItem).data = data;
+                               else return null;
                            }
                            catch (Exception e)
                            {
                                recordError(keyFuncSet.Key, e);
                            }
+                           return data;
                        });
                    }
                else
@@ -122,17 +125,20 @@ namespace Livingstone.Library
                         keyCancelToken[keyFuncSet.Key] = ts;
                         var newTsk = Task.Run(() =>
                         {
+                            object data = null;
                             try
                             {
-                                object data = keyFuncSet.Value();
+                                data = keyFuncSet.Value();
                                 if (!ct.IsCancellationRequested &&
                                 memoryCache.Contains(keyFuncSet.Key) && memoryCache[keyFuncSet.Key] != null)
                                     (memoryCache[keyFuncSet.Key] as MemoryCacheTimedItem).data = data;
+                                else return null;
                             }
                             catch (Exception e)
                             {
                                 recordError(keyFuncSet.Key, e);
                             }
+                            return data;
                         });
                         keyTasks[keyFuncSet.Key] = newTsk;
                         tskList.Add(newTsk);
@@ -195,18 +201,21 @@ namespace Livingstone.Library
                         CancellationTokenSource ts = new CancellationTokenSource();
                         CancellationToken ct = ts.Token;
                         keyCancelToken[key] = ts;
-                        keyTasks[key] = Task.Factory.StartNew(() =>
+                        keyTasks[key] = Task.Run(() =>
                         {
+                            object newData = null;
                             try
                             {
-                                object newData = getData();
+                                newData = getData();
                                 if (!ct.IsCancellationRequested)
                                     buildCache(key, newData, expirySec, false);
+                                else return null;
                             }
                             catch (Exception e)
                             {
                                 recordError(key, e);
                             }
+                            return newData;
                         });
                     }
             }
@@ -229,8 +238,7 @@ namespace Livingstone.Library
                 var dataInCache = memoryCache[key] as MemoryCacheTimedItem;
                 if (dataInCache != null && dataInCache.expiry > DateTime.UtcNow)
                     return dataInCache.data;
-            }
-            object data = null;
+            }           
 
             lock (locks[key])
             {
@@ -246,26 +254,31 @@ namespace Livingstone.Library
                 keyCancelToken[key] = ts;
                 keyTasks[key] = Task.Run(() =>
                 {
+                    object data = null;
                     try
                     {
                         data = getData();
                         if (!ct.IsCancellationRequested)
                             buildCache(key, data, expirySec, false);
+                        else return null;
                     }
                     catch (Exception e)
                     {
                         recordError(key, e);
                     }
+                    return data;
                 });
             }
 
             keyTasks[key].Wait();
+            object res = null;
 
             lock (locks[key])
                 //release memory
                 if (keyTasks[key] != null && keyTasks[key].IsCompleted)
                 {
                     keyTasks.TryRemove(key, out var tempTsk);
+                    res = tempTsk.Result;
                     tempTsk.Dispose();
                     keyCancelToken.TryRemove(key, out var tempCt);
                     if (tempCt != null)
@@ -277,7 +290,7 @@ namespace Livingstone.Library
                 var aggEx = new AggregateException(ex);
                 throw aggEx.Flatten();
             }
-            return data;
+            return res;
         }
 
         //key: a unique key as the cache entry
@@ -304,18 +317,21 @@ namespace Livingstone.Library
                         CancellationTokenSource ts = new CancellationTokenSource();
                         CancellationToken ct = ts.Token;
                         keyCancelToken[key] = ts;
-                        keyTasks[key] = Task.Factory.StartNew(() =>
+                        keyTasks[key] = Task.Run(() =>
                         {
+                            object newData = null;
                             try
                             {
-                                object newData = getData();
+                                newData = getData();
                                 if (!ct.IsCancellationRequested)
                                     buildCache(key, newData, expirySec, false);
+                                else return null;
                             }
                             catch (Exception e)
                             {
                                 recordError(key, e);
                             }
+                            return newData;
                         });
                     }
             }
@@ -323,10 +339,12 @@ namespace Livingstone.Library
             //if data does not exist, building cache becomes the only choice
             if ((!memoryCache.Contains(key) || memoryCache[key] == null) && keyTasks.ContainsKey(key))
                 keyTasks[key].Wait();
+            object res = null;
             lock (locks[key])
                 if (keyTasks.ContainsKey(key) && keyTasks[key] != null && keyTasks[key].IsCompleted)
                 {
                     keyTasks.TryRemove(key, out var tempTsk);
+                    res = tempTsk.Result;
                     tempTsk.Dispose();
                     keyCancelToken.TryRemove(key, out var tempCt);
                     if (tempCt != null)
@@ -338,7 +356,7 @@ namespace Livingstone.Library
                 var aggEx = new AggregateException(ex);
                 throw aggEx.Flatten();
             }
-            return (memoryCache[key] as MemoryCacheTimedItem).data;
+            return res;
         }
     }
 }
