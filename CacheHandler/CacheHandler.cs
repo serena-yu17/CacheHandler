@@ -19,14 +19,14 @@ namespace Livingstone.Library
         //timestamped data used in the memorycache, Use the timestamp to control expiracy
         class MemoryCacheTimedItem
         {
-            public DateTime expiry { get; set; }
+            public DateTime validTime { get; set; }
             public object data { get; set; }
 
             //default: ts = now
             public MemoryCacheTimedItem(object data, int expireSec)
             {
                 this.data = data;
-                expiry = DateTime.UtcNow.AddSeconds(expireSec);
+                validTime = DateTime.UtcNow.AddSeconds(expireSec);
             }
         }
 
@@ -169,23 +169,23 @@ namespace Livingstone.Library
         //data: the data to be stored
         //expirySec: expiry time in seconds
         //throttle: if not throttle, the update of cache will be forced before fetching new data beyond expiry time
-        public static void buildCache(string key, object data, int expirySec = 3600, bool throttle = true)
+        public static void buildCache(string key, object data, int intervalSec = 3600, int expirySec = 7200, bool throttle = true)
         {
             if (expirySec == 0)
                 expirySec = 432000;     //a week
                                         //noForce: do not force updates before cache expires
             if (!throttle || !memoryCache.Contains(key) || memoryCache[key] == null ||
-                 (memoryCache[key] as MemoryCacheTimedItem).expiry > DateTime.UtcNow
+                 (memoryCache[key] as MemoryCacheTimedItem).validTime < DateTime.UtcNow
                 )
             {
-                MemoryCacheTimedItem newEntry = new MemoryCacheTimedItem(data, expirySec);
+                MemoryCacheTimedItem newEntry = new MemoryCacheTimedItem(data, intervalSec);
                 memoryCache.Set(key, newEntry,
                     new CacheItemPolicy() { SlidingExpiration = TimeSpan.FromSeconds(expirySec) }
                     );
             }
         }
 
-        public static void buildCache(string key, Func<object> getData, int expirySec = 3600, bool throttle = true)
+        public static void buildCache(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200, bool throttle = true)
         {
             if (!locks.ContainsKey(key))
                 lock (locks)
@@ -196,7 +196,7 @@ namespace Livingstone.Library
                 expirySec = 432000;     //a week
                                         //noForce: do not force updates before cache expires
             if (!throttle || !memoryCache.Contains(key) || memoryCache[key] == null ||
-                 (memoryCache[key] as MemoryCacheTimedItem).expiry < DateTime.UtcNow
+                 (memoryCache[key] as MemoryCacheTimedItem).validTime < DateTime.UtcNow
                 )
             {
                 lock (locks[key])
@@ -212,7 +212,7 @@ namespace Livingstone.Library
                             {
                                 newData = getData();
                                 if (!ct.IsCancellationRequested)
-                                    buildCache(key, newData, expirySec, false);
+                                    buildCache(key, newData, intervalSec, expirySec, false);
                                 else return null;
                             }
                             catch (Exception e)
@@ -240,9 +240,9 @@ namespace Livingstone.Library
             if (memoryCache.Contains(key))
             {
                 var dataInCache = memoryCache[key] as MemoryCacheTimedItem;
-                if (dataInCache != null && dataInCache.expiry > DateTime.UtcNow)
+                if (dataInCache != null && dataInCache.validTime > DateTime.UtcNow)
                     return dataInCache.data;
-            }           
+            }
 
             lock (locks[key])
             {
@@ -263,7 +263,7 @@ namespace Livingstone.Library
                     {
                         data = getData();
                         if (!ct.IsCancellationRequested)
-                            buildCache(key, data, expirySec, false);
+                            buildCache(key, data, intervalSec, expirySec, false);
                         else return null;
                     }
                     catch (Exception e)
@@ -294,6 +294,8 @@ namespace Livingstone.Library
                 var aggEx = new AggregateException(ex);
                 throw aggEx.Flatten();
             }
+            if (res == null)
+                res = (memoryCache[key] as MemoryCacheTimedItem).data;
             return res;
         }
 
@@ -313,7 +315,7 @@ namespace Livingstone.Library
                                         //background update for next use if data expires
             if (
                 ((!memoryCache.Contains(key) || memoryCache[key] == null)
-                    || (memoryCache[key] as MemoryCacheTimedItem).expiry < DateTime.UtcNow))
+                    || (memoryCache[key] as MemoryCacheTimedItem).validTime < DateTime.UtcNow))
             {
                 lock (locks[key])
                     if (!keyTasks.ContainsKey(key) || keyTasks[key].IsCompleted)
@@ -328,7 +330,7 @@ namespace Livingstone.Library
                             {
                                 newData = getData();
                                 if (!ct.IsCancellationRequested)
-                                    buildCache(key, newData, expirySec, false);
+                                    buildCache(key, newData, intervalSec, expirySec, false);
                                 else return null;
                             }
                             catch (Exception e)
@@ -360,6 +362,8 @@ namespace Livingstone.Library
                 var aggEx = new AggregateException(ex);
                 throw aggEx.Flatten();
             }
+            if (res == null)
+                res = (memoryCache[key] as MemoryCacheTimedItem).data;
             return res;
         }
     }
