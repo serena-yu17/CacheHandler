@@ -55,6 +55,8 @@ namespace Livingstone.Library
         {
             Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
            {
+               if (string.IsNullOrEmpty(keyFuncSet.Key))
+                   return;
                if (!locks.ContainsKey(keyFuncSet.Key))
                    lock (locks)
                        if (!locks.ContainsKey(keyFuncSet.Key))
@@ -112,6 +114,8 @@ namespace Livingstone.Library
             ConcurrentBag<Task> tskList = new ConcurrentBag<Task>();
             Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
             {
+                if (string.IsNullOrEmpty(keyFuncSet.Key))
+                    return;
                 if (!locks.ContainsKey(keyFuncSet.Key))
                     lock (locks)
                         if (!locks.ContainsKey(keyFuncSet.Key))
@@ -187,6 +191,8 @@ namespace Livingstone.Library
 
         public static void buildCache(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200, bool throttle = true)
         {
+            if (string.IsNullOrEmpty(key))
+                return;
             if (!locks.ContainsKey(key))
                 lock (locks)
                     if (!locks.ContainsKey(key))
@@ -231,6 +237,8 @@ namespace Livingstone.Library
         //expirySec: sliding expiry time before the cache will be wiped out
         public static object readCache(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
         {
+            if (string.IsNullOrEmpty(key))
+                return null;
             if (!locks.ContainsKey(key))
                 lock (locks)
                     if (!locks.ContainsKey(key))
@@ -305,6 +313,8 @@ namespace Livingstone.Library
         //expirySec: sliding expiry time before the cache will be wiped out
         public static object readCacheBackground(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
         {
+            if (string.IsNullOrEmpty(key))
+                return null;
             if (!locks.ContainsKey(key))
                 lock (locks)
                     if (!locks.ContainsKey(key))
