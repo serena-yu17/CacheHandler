@@ -376,5 +376,80 @@ namespace Livingstone.Library
                 res = (memoryCache[key] as MemoryCacheTimedItem).data;
             return res;
         }
+
+        //key: a unique key as the cache entry
+        //data: a delegate to obtain the data in case of expiry
+        //intervalSec: interval before next update in seconds
+        //expirySec: sliding expiry time before the cache will be wiped out
+        public static async Task<object> readCacheBackgroundAsync(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
+        {
+            if (string.IsNullOrEmpty(key))
+                return null;
+            if (!locks.ContainsKey(key))
+                lock (locks)
+                    if (!locks.ContainsKey(key))
+                        locks[key] = new object();
+
+            if (expirySec == 0)
+                expirySec = 432000;     //a week
+                                        //background update for next use if data expires
+            if (
+                ((!memoryCache.Contains(key) || memoryCache[key] == null)
+                    || (memoryCache[key] as MemoryCacheTimedItem).validTime < DateTime.UtcNow))
+            {
+                lock (locks[key])
+                    if (!keyTasks.ContainsKey(key) || keyTasks[key].IsCompleted)
+                    {
+                        CancellationTokenSource ts = new CancellationTokenSource();
+                        CancellationToken ct = ts.Token;
+                        keyCancelToken[key] = ts;
+                        keyTasks[key] = Task.Run(() =>
+                        {
+                            object newData = null;
+                            try
+                            {
+                                newData = getData();
+                                if (!ct.IsCancellationRequested)
+                                    buildCache(key, newData, intervalSec, expirySec, false);
+                                else return null;
+                            }
+                            catch (Exception e)
+                            {
+                                recordError(key, e);
+                            }
+                            return newData;
+                        });
+                    }
+            }
+
+            //if data does not exist, building cache becomes the only choice
+            if ((!memoryCache.Contains(key) || memoryCache[key] == null) && keyTasks.ContainsKey(key))
+                await keyTasks[key].ConfigureAwait(false);
+            object res = null;
+            Task<object> tempTsk = null;
+            if (keyTasks.ContainsKey(key) && keyTasks[key] != null && keyTasks[key].IsCompleted)
+                lock (locks[key])
+                    if (keyTasks.ContainsKey(key) && keyTasks[key] != null && keyTasks[key].IsCompleted)
+                    {
+                        keyTasks.TryRemove(key, out tempTsk);
+                        keyCancelToken.TryRemove(key, out var tempCt);
+                        if (tempCt != null)
+                            tempCt.Dispose();
+                    }
+            if (tempTsk != null)
+            {
+                res = await tempTsk.ConfigureAwait(false);
+                tempTsk.Dispose();
+            }
+
+            if (errors.TryRemove(key, out var ex))
+            {
+                var aggEx = new AggregateException(ex);
+                throw aggEx.Flatten();
+            }
+            if (res == null)
+                res = (memoryCache[key] as MemoryCacheTimedItem).data;
+            return res;
+        }
     }
 }
