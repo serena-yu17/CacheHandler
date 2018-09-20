@@ -16,17 +16,31 @@ namespace Livingstone.Library
         static ConcurrentDictionary<string, ConcurrentBag<Exception>> errors = new ConcurrentDictionary<string, ConcurrentBag<Exception>>();
         static Dictionary<string, object> locks = new Dictionary<string, object>();
 
+        static long timeTick = DateTime.UtcNow.Ticks / TimeSpan.TicksPerSecond;
+        static System.Timers.Timer tickTimer = null;
+
+        static CacheHandler()
+        {
+            tickTimer = new System.Timers.Timer(1000);
+            tickTimer.AutoReset = true;
+            tickTimer.Elapsed += (s, e) =>
+            {
+                var tick = DateTime.UtcNow.Ticks / TimeSpan.TicksPerSecond;
+                Interlocked.Exchange(ref timeTick, tick);
+            };
+        }
+
         //timestamped data used in the memorycache, Use the timestamp to control expiracy
         class MemoryCacheTimedItem
         {
-            public DateTime validTime { get; set; }
+            public long validTime { get; set; }
             public object data { get; set; }
 
             //default: ts = now
             public MemoryCacheTimedItem(object data, int expireSec)
             {
                 this.data = data;
-                validTime = DateTime.UtcNow.AddSeconds(expireSec);
+                validTime = timeTick + expireSec;
             }
         }
 
@@ -179,13 +193,11 @@ namespace Livingstone.Library
                 expirySec = 432000;     //a week
                                         //noForce: do not force updates before cache expires
             if (!throttle || !memoryCache.Contains(key) || memoryCache[key] == null ||
-                 (memoryCache[key] as MemoryCacheTimedItem).validTime < DateTime.UtcNow
+                 (memoryCache[key] as MemoryCacheTimedItem).validTime < timeTick
                 )
             {
                 MemoryCacheTimedItem newEntry = new MemoryCacheTimedItem(data, intervalSec);
-                memoryCache.Set(key, newEntry,
-                    new CacheItemPolicy() { SlidingExpiration = TimeSpan.FromSeconds(expirySec) }
-                    );
+                memoryCache.Set(key, newEntry, DateTime.UtcNow.AddSeconds(expirySec));
             }
         }
 
@@ -202,7 +214,7 @@ namespace Livingstone.Library
                 expirySec = 432000;     //a week
                                         //noForce: do not force updates before cache expires
             if (!throttle || !memoryCache.Contains(key) || memoryCache[key] == null ||
-                 (memoryCache[key] as MemoryCacheTimedItem).validTime < DateTime.UtcNow
+                 (memoryCache[key] as MemoryCacheTimedItem).validTime < timeTick
                 )
             {
                 lock (locks[key])
@@ -248,7 +260,7 @@ namespace Livingstone.Library
             if (memoryCache.Contains(key))
             {
                 var dataInCache = memoryCache[key] as MemoryCacheTimedItem;
-                if (dataInCache != null && dataInCache.validTime > DateTime.UtcNow)
+                if (dataInCache != null && dataInCache.validTime > timeTick)
                     return dataInCache.data;
             }
 
@@ -325,7 +337,7 @@ namespace Livingstone.Library
                                         //background update for next use if data expires
             if (
                 ((!memoryCache.Contains(key) || memoryCache[key] == null)
-                    || (memoryCache[key] as MemoryCacheTimedItem).validTime < DateTime.UtcNow))
+                    || (memoryCache[key] as MemoryCacheTimedItem).validTime < timeTick))
             {
                 lock (locks[key])
                     if (!keyTasks.ContainsKey(key) || keyTasks[key].IsCompleted)
@@ -395,7 +407,7 @@ namespace Livingstone.Library
                                         //background update for next use if data expires
             if (
                 ((!memoryCache.Contains(key) || memoryCache[key] == null)
-                    || (memoryCache[key] as MemoryCacheTimedItem).validTime < DateTime.UtcNow))
+                    || (memoryCache[key] as MemoryCacheTimedItem).validTime < timeTick))
             {
                 lock (locks[key])
                     if (!keyTasks.ContainsKey(key) || keyTasks[key].IsCompleted)
