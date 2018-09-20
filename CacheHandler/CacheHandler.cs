@@ -28,6 +28,7 @@ namespace Livingstone.Library
                 var tick = DateTime.UtcNow.Ticks / TimeSpan.TicksPerSecond;
                 Interlocked.Exchange(ref timeTick, tick);
             };
+            tickTimer.Start();
         }
 
         //timestamped data used in the memorycache, Use the timestamp to control expiracy
