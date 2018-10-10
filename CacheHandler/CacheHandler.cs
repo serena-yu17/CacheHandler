@@ -7,6 +7,9 @@ using System.Threading.Tasks;
 
 namespace Livingstone.Library
 {
+    /// <summary>
+    /// Handles caching in .net
+    /// </summary>
     public static class CacheHandler
     {
         static MemoryCache memoryCache = new MemoryCache("CacheHandler");
@@ -54,6 +57,10 @@ namespace Livingstone.Library
             errors[key].Add(e);
         }
 
+        /// <summary>
+        /// Remove a cache by key
+        /// </summary>
+        /// <param name="key">memory key to the cache</param>
         public static void removeKey(string key)
         {
             if (keyCancelToken.TryRemove(key, out var ct))
@@ -64,8 +71,12 @@ namespace Livingstone.Library
             if (keyTasks.TryRemove(key, out var tsk))
                 tsk.Dispose();
             errors.TryRemove(key, out var err);
-        }
+        }        
 
+        /// <summary>
+        /// Re-build all caches contained in <paramref name="memKeyEntries"/> by calling the delegates in each dictionary entry
+        /// </summary>
+        /// <param name="memKeyEntries">Memory keys paired with delegates that will rebuild the cache</param>
         public static void resetMemCache(IDictionary<string, Func<object>> memKeyEntries)
         {
             Parallel.ForEach(memKeyEntries, (keyFuncSet) =>
@@ -124,6 +135,11 @@ namespace Livingstone.Library
            });
         }
 
+        /// <summary>
+        /// Re-build all caches contained in <paramref name="memKeyEntries"/> by calling the delegates in each dictionary entry. Asynchronous version
+        /// </summary>
+        /// <param name="memKeyEntries">Memory keys paired with delegates that will rebuild the cache</param>
+        /// <returns>void Task</returns>
         public static async Task resetMemCacheAsync(IDictionary<string, Func<object>> memKeyEntries)
         {
             ConcurrentBag<Task> tskList = new ConcurrentBag<Task>();
@@ -183,11 +199,15 @@ namespace Livingstone.Library
             });
             await Task.WhenAll(tskList).ConfigureAwait(false);
         }
-
-        //key: a unique key as the cache entry
-        //data: the data to be stored
-        //expirySec: expiry time in seconds
-        //throttle: if not throttle, the update of cache will be forced before fetching new data beyond expiry time
+                
+        /// <summary>
+        /// Build a cache into the MemoryCache
+        /// </summary>
+        /// <param name="key">A unique memory key as the cache entry</param>
+        /// <param name="data">The data to be stored</param>
+        /// <param name="intervalSec">If shorter than the interval in seconds, the update will be throttled</param>
+        /// <param name="expirySec">Absolute expiry time in seconds</param>
+        /// <param name="throttle">If not throttle, the update of cache will be forced regardless of the <paramref name="intervalSec"/></param>
         public static void buildCache(string key, object data, int intervalSec = 3600, int expirySec = 7200, bool throttle = true)
         {
             if (expirySec == 0)
@@ -202,6 +222,14 @@ namespace Livingstone.Library
             }
         }
 
+        /// <summary>
+        /// Build a cache into the MemoryCache by calling a delegate
+        /// </summary>
+        /// <param name="key">A unique memory key as the cache entry</param>
+        /// <param name="getData">A delegate that will generate the data</param>
+        /// <param name="intervalSec">If shorter than the interval in seconds, the update will be throttled</param>
+        /// <param name="expirySec">Absolute expiry time in seconds</param>
+        /// <param name="throttle">If not throttle, the update of cache will be forced regardless of the <paramref name="intervalSec"/></param>
         public static void buildCache(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200, bool throttle = true)
         {
             if (string.IsNullOrEmpty(key))
@@ -244,10 +272,14 @@ namespace Livingstone.Library
             }
         }
 
-        //key: a unique key as the cache entry
-        //getData: a delegate to obtain the data in case of expiry
-        //intervalSec: interval before next update in seconds
-        //expirySec: sliding expiry time before the cache will be wiped out
+        /// <summary>
+        /// Read data from the cache. If cached data has expired, it will block until new data is generated.
+        /// </summary>
+        /// <param name="key">Memory key pointing to the cache</param>
+        /// <param name="getData">A delegate that will generate the data</param>
+        /// <param name="intervalSec">If shorter than the interval in seconds, the update will be throttled</param>
+        /// <param name="expirySec">Absolute expiry time in seconds</param>
+        /// <returns>Retrieved data</returns>
         public static object readCache(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
         {
             if (string.IsNullOrEmpty(key))
@@ -320,10 +352,14 @@ namespace Livingstone.Library
             return res;
         }
 
-        //key: a unique key as the cache entry
-        //data: a delegate to obtain the data in case of expiry
-        //intervalSec: interval before next update in seconds
-        //expirySec: sliding expiry time before the cache will be wiped out
+        /// <summary>
+        /// Read data from the cache. If cached data has expired, it will not block, but serve the expired data first, and generate data at the background.
+        /// </summary>
+        /// <param name="key">Memory key pointing to the cache</param>
+        /// <param name="getData">A delegate that will generate the data</param>
+        /// <param name="intervalSec">If shorter than the interval in seconds, the update will be throttled</param>
+        /// <param name="expirySec">Absolute expiry time in seconds</param>
+        /// <returns>Retrieved data</returns>
         public static object readCacheBackground(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
         {
             if (string.IsNullOrEmpty(key))
@@ -390,10 +426,14 @@ namespace Livingstone.Library
             return res;
         }
 
-        //key: a unique key as the cache entry
-        //data: a delegate to obtain the data in case of expiry
-        //intervalSec: interval before next update in seconds
-        //expirySec: sliding expiry time before the cache will be wiped out
+        /// <summary>
+        /// Read data from the cache. If cached data has expired, it will not block, but serve the expired data first, and generate data at the background. Asynchronous version
+        /// </summary>
+        /// <param name="key">Memory key pointing to the cache</param>
+        /// <param name="getData">A delegate that will generate the data</param>
+        /// <param name="intervalSec">If shorter than the interval in seconds, the update will be throttled</param>
+        /// <param name="expirySec">Absolute expiry time in seconds</param>
+        /// <returns>Retrieved data</returns>
         public static async Task<object> readCacheBackgroundAsync(string key, Func<object> getData, int intervalSec = 3600, int expirySec = 7200)
         {
             if (string.IsNullOrEmpty(key))
